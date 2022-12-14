@@ -1,0 +1,14 @@
+version: "3"
+services:
+  clickhouse-server:
+    image: clickhouse/clickhouse-server
+    ports:
+      - 8123:8123
+  db_generator:
+    build: db_generator/
+    command: python ./db_generator.py
+    network_mode: host
+    environment:
+      - SEED=$SEED
+    depends_on:
+      - clickhouse-server
