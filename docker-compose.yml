@@ -10,5 +10,7 @@ services:
     network_mode: host
     environment:
       - SEED=$SEED
+      - VISITORS_PER_HOUR=$VISITORS_PER_HOUR
+      - DURATION=$DURATION
     depends_on:
       - clickhouse-server
