@@ -1,15 +1,19 @@
 import simpy
 import random
 import numpy as np
-import statistics
-import datetime
-import time 
-
 import os
+from logger import FileLogger
 
 class OnlineShop(object):
     def __init__(self, env):
         self.env = env
+        self.add_to_cart_p = 0.1 #Вероятность добавления в корзину
+        self.purchase_cart_p = 0.7 #Вероятность покупки корзины
+        self.main_page_p = 0.4 #Вероятность попадания на сайт через главную страницу
+        self.page_404_p = 0.1 #Вероятность попадания на 404
+        self.page_404_continue_p = 0.4 #Вероятность продолжения использования сайта после 404
+        self.avg_product_visit = 5 #среднее количство посещенных страниц с товаром
+        self.dispersion_product_visit = 30 #дисперсия посещенных страниц с товаром
         self.domain = "http://krep.com/"
         self.pages = {
             'main': WebPage(self.domain,"GET",5),
@@ -23,28 +27,36 @@ class OnlineShop(object):
         }
         self.catalog = {'gvozdi':range(1000),'dyubeli':range(1000,2000),'zaklyopki':range(2000,3000),'xomuty':range(3000,4000),'takelaz':range(4000,5000),'samorezy':range(5000,6000)}
     def run_visitor(self,logger, visitor):
-        yield self.env.process(self.pages['main'].open(self.env,logger,visitor))
-        yield self.env.process(self.pages['catalog'].open(self.env,logger,visitor))# открываем каталог
+        cart_count = 0
+        if random.random() < self.page_404_p: # Иногда появляются переходы на 404
+            yield self.env.process(self.pages['404'].open(self.env,logger,visitor))
+            if random.random() > self.page_404_continue_p: # Продолжает пользоваться сайтом или уходит
+                return
+            
+        if random.random() < self.main_page_p: #Если попадаем на сайт через главную старницу
+            yield self.env.process(self.pages['main'].open(self.env,logger,visitor))
+            yield self.env.process(self.pages['catalog'].open(self.env,logger,visitor))# открываем каталог
 
         choose_catalog = random.choice(list(self.catalog))
         choose_catalog_url = self.domain+'catalog/'+ choose_catalog + "/" 
         yield self.env.process(WebPage(choose_catalog_url,"GET",20).open(self.env,logger,visitor))# открываем случайный раздел из каталога
 
-        for i in range(random.randint(1,10)): # просматривает случаное число товаров
+        for i in range(int(np.abs(np.random.normal(self.avg_product_visit, self.dispersion_product_visit)))): # просматривает несколько товаров
             choose_product_id = str(random.choice(self.catalog[choose_catalog]))
             choose_product_url = choose_catalog_url+ choose_product_id + "/"
             yield self.env.process(WebPage(choose_product_url,"GET",20).open(self.env,logger,visitor))#переходит на страницу товара
-            if random.choice([False,False,True]):
+            if random.random() < self.add_to_cart_p:
                 yield self.env.process(self.pages['add-to-cart'].open(self.env,logger,visitor))# добавляет в корзину 
                 yield self.env.process(WebPage(choose_product_url,"GET",5).open(self.env,logger,visitor))#редирект обратно на страницу продукта
+                cart_count += 1
             yield self.env.process(WebPage(choose_catalog_url,"GET",20).open(self.env,logger,visitor))#возвращается обратано в каталог
         
-            
-        yield self.env.process(self.pages['cart'].open(self.env,logger,visitor))#Переходит в корзину
-        yield self.env.process(self.pages['order'].open(self.env,logger,visitor))#Переходит на страницу заказа
-        yield self.env.process(self.pages['order-data'].open(self.env,logger,visitor))# Отправляет данные о заказе
-        yield self.env.process(self.pages['thanks'].open(self.env,logger,visitor))# Редирект на страницу спасибо за заказ
-
+        if cart_count > 0:
+            yield self.env.process(self.pages['cart'].open(self.env,logger,visitor))#Переходит в корзину
+            if random.random() < self.purchase_cart_p:# оплачивает ли заказ
+                yield self.env.process(self.pages['order'].open(self.env,logger,visitor))#Переходит на страницу заказа
+                yield self.env.process(self.pages['order-data'].open(self.env,logger,visitor))# Отправляет данные о заказе
+                yield self.env.process(self.pages['thanks'].open(self.env,logger,visitor))# Редирект на страницу спасибо за заказ
             
         
 
@@ -72,45 +84,10 @@ class Visitor:
     def get_request_time(self):
         return np.abs(np.random.normal(self.avg_request_time, self.connection_stability))
 
-class Logger:
-    def __init__(self,base_time = datetime.datetime.now()):
-        self.base_time = base_time
-        self.buffer = []
-        self.max_buffer_size = 100000
-    def append_log(self,env,web_page,visitor,request_time):
-        data = [self.base_time + datetime.timedelta(seconds=env.now),web_page.url,web_page.method,web_page.http_status,visitor.user_agent,visitor.ip,request_time]
-        self.buffer.append(data)
-        if len(self.buffer) >= self.max_buffer_size:
-            self._send_buffer()
 
-    def _send_buffer(self):
-        pass
-
-class FileLogger(Logger):
-    def __init__(self,file_name,base_time = datetime.datetime.now()):
-        self.base_time = base_time
-        self.file_name = file_name
-        self.buffer = []
-        self.max_buffer_size = 100000
-    def _send_buffer(self):
-        with open(self.file_name, "a+") as f:
-            buffer_str = map(str,self.buffer)
-            f.write("\n".join(buffer_str))
-        self.buffer.clear()
-
-class ClickhouseLogger(Logger):
-    def __init__(self,client,table_name, base_time = datetime.datetime.now()):
-        self.base_time = base_time
-        self.client = client
-        self.table_name = table_name
-        self.buffer = []
-        self.max_buffer_size = 100000
-    def _send_buffer(self):
-        self.client.insert(self.table_name, self.buffer, column_names=['timestamp','request','request_method','http_status','user_agent','user_ip','request_time'])
-        self.buffer.clear()
 
 def generate_visitor():
-    with open('user-agents.txt') as file:
+    with open('user_agent_top_50.txt') as file:
         user_agents = [line.rstrip() for line in file]
     ip = str(random.randint(0,255))+'.'+str(random.randint(0,255))+'.'+str(random.randint(0,255))+'.'+str(random.randint(0,255))
     avg_request_time = np.abs(np.random.normal(2, 20))

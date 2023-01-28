@@ -1,32 +1,44 @@
 import clickhouse_connect
 import time
-import traceback
-import random
 import os
 import web_site_sim
-
+from logger import ClickhouseLogger
 
 CLICKHOUSE_CONNECT_ATTEMPTS = 10
 
 SEED = os.environ.get('SEED')
 VISITORS_PER_HOUR = os.environ.get('VISITORS_PER_HOUR')
 DURATION = os.environ.get('DURATION')
+BUFFER_SIZE = os.environ.get('BUFFER_SIZE')
 
 if SEED !=''and not SEED is None:
-    print("SEED=",SEED)
     SEED = int(SEED)
+else:
+    print("Use default SEED")
+    SEED = time.time()
 
 if VISITORS_PER_HOUR !='' and not VISITORS_PER_HOUR is None:
-    print("VISITORS_PER_HOUR=",VISITORS_PER_HOUR)
     VISITORS_PER_HOUR = int(VISITORS_PER_HOUR)
 else:
+    print("Use default VISITORS_PER_HOUR")
     VISITORS_PER_HOUR = 1000
 
 if DURATION !='' and not DURATION is None:
-    print("DURATION=",DURATION)
     DURATION = float(DURATION)*3600
 else:
+    print("Use default DURATION")
     DURATION = 24*3600
+
+if BUFFER_SIZE !='' and not BUFFER_SIZE is None:
+    BUFFER_SIZE = int(BUFFER_SIZE)
+else:
+    print("Use default BUFFER_SIZE")
+    BUFFER_SIZE = 10000
+
+print("SEED=",SEED)
+print("VISITORS_PER_HOUR=",VISITORS_PER_HOUR)
+print("DURATION=",DURATION / 3600)
+print("BUFFER_SIZE=",BUFFER_SIZE)
 
 print("run db_generator")
 for i in range(0,CLICKHOUSE_CONNECT_ATTEMPTS+1):
@@ -54,9 +66,9 @@ client.command('''CREATE TABLE log_storage.logs_app(
 `request_time` Float32)
        ENGINE = MergeTree()
        PARTITION BY toYYYYMM(timestamp)
-       ORDER BY (timestamp, request, request_method,user_ip);''')
+       ORDER BY (timestamp, request, request_method,http_status,user_agent,user_ip);''')
 start_time = time.time()
-logger = web_site_sim.ClickhouseLogger(client,'log_storage.logs_app')
+logger = ClickhouseLogger(client,'log_storage.logs_app',buffer_size=BUFFER_SIZE)
 web_site_sim.generate_logs(logger,SEED,VISITORS_PER_HOUR,DURATION)
 logger._send_buffer()
 exec_time = time.time() - start_time
